@@ -1,95 +1,175 @@
 import os
-from groq import Groq
 from dotenv import load_dotenv
 
 # Carrega variáveis de ambiente do arquivo .env (caso exista)
 load_dotenv()
 
 
+def pesquisar_na_web(termo: str) -> str:
+    """
+    Pesquisa na internet em tempo real sobre qualquer assunto:
+    notícias de hoje, clima, cotações, resultados esportivos, eventos recentes
+    ou qualquer dúvida que exija dados atualizados.
+    Retorna os títulos, resumos e links dos resultados encontrados.
+    """
+    try:
+        from ddgs import DDGS
+        resultados = list(DDGS().text(termo, max_results=4))
+        if not resultados:
+            return "Nenhum resultado relevante encontrado na pesquisa web."
+        
+        trechos = []
+        for r in resultados:
+            titulo = r.get("title", "")
+            resumo = r.get("body", "")
+            link = r.get("href", "")
+            trechos.append(f"Título: {titulo}\nResumo: {resumo}\nLink: {link}")
+        return "\n\n".join(trechos)
+    except Exception as e:
+        return f"Erro ao realizar pesquisa na internet: {str(e)}"
+
+
 class AgenteIA:
     """
-    Representa um Agente de IA capaz de conversar em linguagem natural
-    mantendo o histórico de mensagens como contexto.
+    Representa um Agente de IA capaz de conversar em linguagem natural,
+    manter histórico e pesquisar qualquer pergunta na internet em tempo real.
+    Suporta Google Gemini e Groq Cloud.
     """
 
     def __init__(
         self,
         api_key: str = None,
-        modelo: str = "qwen/qwen3.8-27b",
+        provedor: str = "auto",
+        modelo: str = None,
         instrucao_sistema: str = None,
     ):
         """
-        Inicializa o agente com a chave da API, o modelo escolhido e a persona/instrução do sistema.
+        Inicializa o agente com suporte a Gemini, Groq e ferramentas de pesquisa web.
+        :param api_key: Chave de API (se None, busca no .env ou st.secrets)
+        :param provedor: 'gemini', 'groq' ou 'auto'
+        :param modelo: Nome do modelo (opcional, usa o padrão do provedor)
+        :param instrucao_sistema: Personalidade/prompt do sistema
         """
-        # Se a chave não for passada diretamente, busca na variável de ambiente GROQ_API_KEY
-        self.api_key = api_key or os.getenv("GROQ_API_KEY")
+        def _obter_chave(nome: str):
+            chave = os.getenv(nome)
+            if chave:
+                return chave
+            try:
+                import streamlit as st
+                return st.secrets.get(nome)
+            except Exception:
+                return None
 
-        if not self.api_key:
-            raise ValueError(
-                "Chave de API não informada! Defina GROQ_API_KEY no arquivo .env "
-                "ou passe a chave diretamente."
-            )
+        gemini_key = _obter_chave("GEMINI_API_KEY")
+        groq_key = _obter_chave("GROQ_API_KEY")
 
-        # Inicializa o cliente da Groq (provedor que roda modelos de código aberto de forma ultra-rápida)
-        self.client = Groq(api_key=self.api_key)
-        self.modelo = modelo
+        # Determina o provedor
+        if provedor == "auto":
+            if api_key:
+                if api_key.startswith("gsk_"):
+                    self.provedor = "groq"
+                else:
+                    self.provedor = "gemini"
+            elif gemini_key:
+                self.provedor = "gemini"
+            elif groq_key:
+                self.provedor = "groq"
+            else:
+                self.provedor = "gemini"
+        else:
+            self.provedor = provedor.lower()
 
-        # Instrução do sistema (System Prompt): define o comportamento e personalidade do agente
+        # Define a chave e modelo correto
+        if self.provedor == "gemini":
+            self.api_key = api_key or gemini_key
+            if not self.api_key:
+                raise ValueError("Chave do Gemini não encontrada! Defina GEMINI_API_KEY no arquivo .env.")
+            self.modelo = modelo or "gemini-3.5-flash-lite"
+        else:
+            self.provedor = "groq"
+            self.api_key = api_key or groq_key
+            if not self.api_key:
+                raise ValueError("Chave da Groq não encontrada! Defina GROQ_API_KEY no arquivo .env.")
+            self.modelo = modelo or "llama-3.1-8b-instant"
+
+        # Instrução do sistema (System Prompt)
         self.instrucao_sistema = instrucao_sistema or (
-            "Você é um assistente virtual inteligente, amigável e prestativo. "
-            "Responda com clareza em português, seja educado e mantenha a coerência com as mensagens anteriores."
+            "Você é um assistente virtual inteligente, amigável e prestativo com acesso à internet em tempo real. "
+            "Responda sempre com clareza em português, com boa formatação e seja educado. "
+            "Sempre que o usuário fizer perguntas que exijam dados atuais (como clima, cotações de moedas, notícias recentes, "
+            "eventos de hoje, lançamentos ou fatos que precisem de confirmação recente), utilize a ferramenta "
+            "'pesquisar_na_web' para pesquisar na internet antes de responder."
         )
 
-        # Histórico da conversa: lista que armazena os turnos de diálogo
-        # Como os LLMs não guardam memória sozinhos entre requisições, enviamos este histórico a cada pergunta.
+        # Histórico da conversa visível
         self.historico = []
-        self._inicializar_historico()
 
-    def _inicializar_historico(self):
-        """Define a mensagem inicial de sistema no histórico."""
-        self.historico = [
-            {"role": "system", "content": self.instrucao_sistema}
-        ]
+        # Inicializa cliente específico
+        self._inicializar_cliente()
+
+    def _inicializar_cliente(self):
+        """Inicializa o cliente do provedor selecionado."""
+        if self.provedor == "gemini":
+            from google import genai
+            from google.genai import types
+
+            self.client = genai.Client(api_key=self.api_key)
+            self.chat_session = self.client.chats.create(
+                model=self.modelo,
+                config=types.GenerateContentConfig(
+                    system_instruction=self.instrucao_sistema,
+                    temperature=0.7,
+                    tools=[pesquisar_na_web],
+                ),
+            )
+            self.historico = [
+                {"role": "system", "content": self.instrucao_sistema}
+            ]
+        else:
+            from groq import Groq
+
+            self.client = Groq(api_key=self.api_key)
+            self.chat_session = None
+            self.historico = [
+                {"role": "system", "content": self.instrucao_sistema}
+            ]
 
     def enviar_mensagem(self, mensagem_usuario: str) -> str:
         """
         Recebe a mensagem do usuário, anexa ao histórico, consulta o LLM e retorna a resposta.
         """
-        # 1. Adiciona a pergunta do usuário ao histórico
         self.historico.append({
             "role": "user",
             "content": mensagem_usuario
         })
 
-        # 2. Chama a API enviando TODO o histórico acumulado (assim o modelo tem memória)
         try:
-            resposta = self.client.chat.completions.create(
-                model=self.modelo,
-                messages=self.historico,
-                temperature=0.7,      # Criatividade da resposta (0.0 = mais exato, 1.0 = mais criativo)
-                max_tokens=1024,       # Limite máximo de tokens na resposta
-            )
+            if self.provedor == "gemini":
+                resposta = self.chat_session.send_message(mensagem_usuario)
+                texto_resposta = resposta.text
+            else:
+                resposta = self.client.chat.completions.create(
+                    model=self.modelo,
+                    messages=self.historico,
+                    temperature=0.7,
+                    max_tokens=1024,
+                )
+                texto_resposta = resposta.choices[0].message.content
 
-            # 3. Extrai o texto da resposta gerada pelo modelo
-            texto_resposta = resposta.choices[0].message.content
-
-            # 4. Adiciona a resposta do assistente ao histórico para as próximas interações
             self.historico.append({
                 "role": "assistant",
                 "content": texto_resposta
             })
-
             return texto_resposta
 
         except Exception as e:
-            # Em caso de erro na chamada, remove a última pergunta para não corromper o histórico
             self.historico.pop()
-            raise RuntimeError(f"Erro ao comunicar com o modelo: {str(e)}")
+            raise RuntimeError(f"Erro ao comunicar com o modelo ({self.provedor}): {str(e)}")
 
     def limpar_memoria(self):
-        """Reinicia o histórico da conversa, mantendo apenas as instruções do sistema."""
-        self._inicializar_historico()
+        """Reinicia o histórico da conversa e a sessão."""
+        self._inicializar_cliente()
 
     def obter_historico_visivel(self):
-        """Retorna o histórico excluindo o prompt de sistema, útil para exibir na tela."""
+        """Retorna o histórico excluindo o prompt de sistema."""
         return [msg for msg in self.historico if msg["role"] != "system"]
