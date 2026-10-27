@@ -12,21 +12,66 @@ def pesquisar_na_web(termo: str) -> str:
     ou qualquer dúvida que exija dados atualizados.
     Retorna os títulos, resumos e links dos resultados encontrados.
     """
+    # Tenta com ddgs primeiro
     try:
         from ddgs import DDGS
         resultados = list(DDGS().text(termo, max_results=4))
-        if not resultados:
-            return "Nenhum resultado relevante encontrado na pesquisa web."
-        
+        if resultados:
+            trechos = []
+            for r in resultados:
+                titulo = r.get("title", "")
+                resumo = r.get("body", "")
+                link = r.get("href", "")
+                trechos.append(f"Título: {titulo}\nResumo: {resumo}\nLink: {link}")
+            return "\n\n".join(trechos)
+    except Exception:
+        pass
+
+    # Fallback: usa requests com DuckDuckGo API
+    try:
+        import requests
+        resp = requests.get(
+            "https://api.duckduckgo.com/",
+            params={"q": termo, "format": "json", "no_html": 1, "skip_disambig": 1},
+            timeout=8
+        )
+        data = resp.json()
         trechos = []
-        for r in resultados:
-            titulo = r.get("title", "")
-            resumo = r.get("body", "")
-            link = r.get("href", "")
-            trechos.append(f"Título: {titulo}\nResumo: {resumo}\nLink: {link}")
-        return "\n\n".join(trechos)
-    except Exception as e:
-        return f"Erro ao realizar pesquisa na internet: {str(e)}"
+
+        # Resposta direta (Abstract)
+        if data.get("AbstractText"):
+            trechos.append(f"Resumo: {data['AbstractText']}\nFonte: {data.get('AbstractURL', '')}")
+
+        # Tópicos relacionados
+        for topic in data.get("RelatedTopics", [])[:4]:
+            if isinstance(topic, dict) and topic.get("Text"):
+                trechos.append(f"Resultado: {topic['Text']}\nLink: {topic.get('FirstURL', '')}")
+
+        if trechos:
+            return "\n\n".join(trechos)
+    except Exception:
+        pass
+
+    # Fallback final: wttr.in para clima
+    try:
+        import requests
+        palavras = termo.lower().split()
+        palavras_clima = ["clima", "tempo", "temperatura", "previsão", "weather", "previsao"]
+        if any(p in palavras for p in palavras_clima):
+            cidade = " ".join([p for p in palavras if p not in palavras_clima + ["de", "do", "da", "em", "no", "na", "qual", "o", "a", "hoje", "agora", "atual"]])
+            if cidade:
+                resp = requests.get(f"https://wttr.in/{cidade}?format=j1", timeout=6)
+                atual = resp.json()["current_condition"][0]
+                temp = atual["temp_C"]
+                sensacao = atual["FeelsLikeC"]
+                umidade = atual["humidity"]
+                desc = atual.get("lang_pt", [{}])
+                condicao = desc[0].get("value", atual["weatherDesc"][0]["value"]) if desc else atual["weatherDesc"][0]["value"]
+                return f"Clima atual em {cidade.title()}: Temperatura {temp}°C, Sensação térmica {sensacao}°C, {condicao}, Umidade {umidade}%."
+    except Exception:
+        pass
+
+    return "Não foi possível realizar a pesquisa no momento. Tente novamente em alguns instantes."
 
 
 class AgenteIA:
