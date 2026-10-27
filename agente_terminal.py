@@ -2,6 +2,7 @@
 agente_terminal.py
 ------------------
 Interface simples via terminal para interagir com o Agente de IA.
+Suporta Google Gemini e Groq Cloud.
 """
 
 import os
@@ -10,25 +11,17 @@ from agente import AgenteIA
 
 def main():
     print("=" * 60)
-    print("BEM-VINDO AO SEU PRIMEIRO AGENTE DE IA COM LLM")
+    print("BEM-VINDO AO SEU AGENTE DE IA (GEMINI & GROQ)")
     print("=" * 60)
-    print("Modelo utilizado: Llama 3 (via Groq Cloud API)")
     print("Comandos especiais:")
     print("  'sair'   -> Encerra o agente")
     print("  'limpar' -> Apaga a memoria e recomeça a conversa")
     print("=" * 60)
 
-    api_key = os.getenv("GROQ_API_KEY")
-    if not api_key:
-        print("\nNenhuma chave GROQ_API_KEY encontrada no arquivo .env.")
-        api_key = input("Cole sua chave da Groq (ou pressione Enter para sair): ").strip()
-        if not api_key:
-            print("Chave nao fornecida. Encerrando o programa.")
-            sys.exit(1)
-
     try:
-        agente = AgenteIA(api_key=api_key)
-        print("\nAgente iniciado com sucesso. O contexto esta ativo.\n")
+        agente = AgenteIA()
+        print(f"\nAgente iniciado com sucesso!")
+        print(f"Provedor ativo: {agente.provedor.upper()} | Modelo: {agente.modelo}\n")
     except Exception as e:
         print(f"\nErro ao inicializar o agente: {e}")
         sys.exit(1)
