@@ -1,11 +1,3 @@
-"""
-agente.py
----------
-Classe principal do Agente de Inteligência Artificial.
-Este arquivo contém a lógica de inicialização do modelo, o controle de memória
-(contexto da conversa) e a chamada à API do LLM.
-"""
-
 import os
 from groq import Groq
 from dotenv import load_dotenv
@@ -23,7 +15,7 @@ class AgenteIA:
     def __init__(
         self,
         api_key: str = None,
-        modelo: str = "llama-3.3-70b-versatile",
+        modelo: str = "qwen/qwen3.8-27b",
         instrucao_sistema: str = None,
     ):
         """
