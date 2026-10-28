@@ -7,71 +7,93 @@ load_dotenv()
 
 def pesquisar_na_web(termo: str) -> str:
     """
-    Pesquisa na internet em tempo real sobre qualquer assunto:
-    notícias de hoje, clima, cotações, resultados esportivos, eventos recentes
-    ou qualquer dúvida que exija dados atualizados.
-    Retorna os títulos, resumos e links dos resultados encontrados.
+    Pesquisa na internet em tempo real sobre qualquer assunto e retorna os resultados encontrados.
+    :param termo: O termo ou pergunta para pesquisar na web.
+    :return: Títulos, resumos e links dos resultados mais relevantes.
     """
-    # Tenta com ddgs primeiro
+    trechos = []
+
+    # 1. Tenta pesquisa geral na web com DDGS (backend padrão)
     try:
         from ddgs import DDGS
-        resultados = list(DDGS().text(termo, max_results=4))
+        resultados = list(DDGS(timeout=10).text(termo, max_results=5))
         if resultados:
-            trechos = []
             for r in resultados:
-                titulo = r.get("title", "")
-                resumo = r.get("body", "")
-                link = r.get("href", "")
-                trechos.append(f"Título: {titulo}\nResumo: {resumo}\nLink: {link}")
-            return "\n\n".join(trechos)
+                titulo = r.get("title", "").strip()
+                resumo = r.get("body", "").strip()
+                link = r.get("href", "").strip()
+                if titulo or resumo:
+                    trechos.append(f"Título: {titulo}\nResumo: {resumo}\nLink: {link}")
+            if trechos:
+                return "\n\n".join(trechos)
     except Exception:
         pass
 
-    # Fallback: usa requests com DuckDuckGo API
+    # 2. Tenta com backend alternativo (lite) caso o principal tenha sido bloqueado ou limitado
+    try:
+        from ddgs import DDGS
+        resultados = list(DDGS(timeout=10).text(termo, backend="lite", max_results=5))
+        if resultados:
+            for r in resultados:
+                titulo = r.get("title", "").strip()
+                resumo = r.get("body", "").strip()
+                link = r.get("href", "").strip()
+                if titulo or resumo:
+                    trechos.append(f"Título: {titulo}\nResumo: {resumo}\nLink: {link}")
+            if trechos:
+                return "\n\n".join(trechos)
+    except Exception:
+        pass
+
+    # 3. Fallback: DuckDuckGo Instant Answer API via requests
     try:
         import requests
         resp = requests.get(
             "https://api.duckduckgo.com/",
             params={"q": termo, "format": "json", "no_html": 1, "skip_disambig": 1},
-            timeout=8
+            headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"},
+            timeout=8,
         )
-        data = resp.json()
-        trechos = []
-
-        # Resposta direta (Abstract)
-        if data.get("AbstractText"):
-            trechos.append(f"Resumo: {data['AbstractText']}\nFonte: {data.get('AbstractURL', '')}")
-
-        # Tópicos relacionados
-        for topic in data.get("RelatedTopics", [])[:4]:
-            if isinstance(topic, dict) and topic.get("Text"):
-                trechos.append(f"Resultado: {topic['Text']}\nLink: {topic.get('FirstURL', '')}")
-
-        if trechos:
-            return "\n\n".join(trechos)
+        if resp.status_code == 200:
+            data = resp.json()
+            if data.get("AbstractText"):
+                trechos.append(f"Resumo: {data['AbstractText']}\nFonte: {data.get('AbstractURL', '')}")
+            for topic in data.get("RelatedTopics", [])[:5]:
+                if isinstance(topic, dict) and topic.get("Text"):
+                    trechos.append(f"Resultado: {topic['Text']}\nLink: {topic.get('FirstURL', '')}")
+            if trechos:
+                return "\n\n".join(trechos)
     except Exception:
         pass
 
-    # Fallback final: wttr.in para clima
+    # 4. Fallback: Wikipedia Search API via requests (para tópicos, conceitos, entidades, fatos)
     try:
+        import re
         import requests
-        palavras = termo.lower().split()
-        palavras_clima = ["clima", "tempo", "temperatura", "previsão", "weather", "previsao"]
-        if any(p in palavras for p in palavras_clima):
-            cidade = " ".join([p for p in palavras if p not in palavras_clima + ["de", "do", "da", "em", "no", "na", "qual", "o", "a", "hoje", "agora", "atual"]])
-            if cidade:
-                resp = requests.get(f"https://wttr.in/{cidade}?format=j1", timeout=6)
-                atual = resp.json()["current_condition"][0]
-                temp = atual["temp_C"]
-                sensacao = atual["FeelsLikeC"]
-                umidade = atual["humidity"]
-                desc = atual.get("lang_pt", [{}])
-                condicao = desc[0].get("value", atual["weatherDesc"][0]["value"]) if desc else atual["weatherDesc"][0]["value"]
-                return f"Clima atual em {cidade.title()}: Temperatura {temp}°C, Sensação térmica {sensacao}°C, {condicao}, Umidade {umidade}%."
+        resp = requests.get(
+            "https://pt.wikipedia.org/w/api.php",
+            params={
+                "action": "query",
+                "list": "search",
+                "srsearch": termo,
+                "format": "json",
+                "utf8": 1,
+            },
+            headers={"User-Agent": "AssistenteIA/1.0"},
+            timeout=6,
+        )
+        if resp.status_code == 200:
+            itens = resp.json().get("query", {}).get("search", [])[:4]
+            for item in itens:
+                titulo = item.get("title", "")
+                snippet = re.sub(r"<[^>]+>", "", item.get("snippet", ""))
+                trechos.append(f"Título: {titulo}\nResumo: {snippet}\nFonte: Wikipedia")
+            if trechos:
+                return "\n\n".join(trechos)
     except Exception:
         pass
 
-    return "Não foi possível realizar a pesquisa no momento. Tente novamente em alguns instantes."
+    return "Não foram encontrados resultados na internet para essa consulta no momento."
 
 
 class AgenteIA:
@@ -141,9 +163,9 @@ class AgenteIA:
         self.instrucao_sistema = instrucao_sistema or (
             "Você é um assistente virtual inteligente, amigável e prestativo com acesso à internet em tempo real. "
             "Responda sempre com clareza em português, com boa formatação e seja educado. "
-            "Sempre que o usuário fizer perguntas que exijam dados atuais (como clima, cotações de moedas, notícias recentes, "
-            "eventos de hoje, lançamentos ou fatos que precisem de confirmação recente), utilize a ferramenta "
-            "'pesquisar_na_web' para pesquisar na internet antes de responder."
+            "Sempre que a pergunta do usuário requerer ou se beneficiar de dados em tempo real, eventos recentes, "
+            "fatos atualizados ou confirmação na internet sobre qualquer assunto, utilize a ferramenta "
+            "'pesquisar_na_web' para obter as informações mais recentes antes de responder."
         )
 
         # Histórico da conversa visível
