@@ -13,10 +13,10 @@ def pesquisar_na_web(termo: str) -> str:
     """
     trechos = []
 
-    # 1. Tenta pesquisa geral na web com DDGS (backend padrão)
+    # 1. Tenta pesquisa geral na web com DDGS (rápida, limite de 3 resultados)
     try:
         from ddgs import DDGS
-        resultados = list(DDGS(timeout=10).text(termo, max_results=5))
+        resultados = list(DDGS(timeout=4).text(termo, max_results=3))
         if resultados:
             for r in resultados:
                 titulo = r.get("title", "").strip()
@@ -32,7 +32,7 @@ def pesquisar_na_web(termo: str) -> str:
     # 2. Tenta com backend alternativo (lite) caso o principal tenha sido bloqueado ou limitado
     try:
         from ddgs import DDGS
-        resultados = list(DDGS(timeout=10).text(termo, backend="lite", max_results=5))
+        resultados = list(DDGS(timeout=4).text(termo, backend="lite", max_results=3))
         if resultados:
             for r in resultados:
                 titulo = r.get("title", "").strip()
@@ -45,20 +45,20 @@ def pesquisar_na_web(termo: str) -> str:
     except Exception:
         pass
 
-    # 3. Fallback: DuckDuckGo Instant Answer API via requests
+    # 3. Fallback rápido: DuckDuckGo Instant Answer API via requests
     try:
         import requests
         resp = requests.get(
             "https://api.duckduckgo.com/",
             params={"q": termo, "format": "json", "no_html": 1, "skip_disambig": 1},
             headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"},
-            timeout=8,
+            timeout=3,
         )
         if resp.status_code == 200:
             data = resp.json()
             if data.get("AbstractText"):
                 trechos.append(f"Resumo: {data['AbstractText']}\nFonte: {data.get('AbstractURL', '')}")
-            for topic in data.get("RelatedTopics", [])[:5]:
+            for topic in data.get("RelatedTopics", [])[:3]:
                 if isinstance(topic, dict) and topic.get("Text"):
                     trechos.append(f"Resultado: {topic['Text']}\nLink: {topic.get('FirstURL', '')}")
             if trechos:
@@ -80,10 +80,10 @@ def pesquisar_na_web(termo: str) -> str:
                 "utf8": 1,
             },
             headers={"User-Agent": "AssistenteIA/1.0"},
-            timeout=6,
+            timeout=3,
         )
         if resp.status_code == 200:
-            itens = resp.json().get("query", {}).get("search", [])[:4]
+            itens = resp.json().get("query", {}).get("search", [])[:3]
             for item in itens:
                 titulo = item.get("title", "")
                 snippet = re.sub(r"<[^>]+>", "", item.get("snippet", ""))
@@ -157,7 +157,7 @@ class AgenteIA:
             self.api_key = api_key or groq_key
             if not self.api_key:
                 raise ValueError("Chave da Groq não encontrada! Defina GROQ_API_KEY no arquivo .env.")
-            self.modelo = modelo or "llama-3.1-8b-instant"
+            self.modelo = modelo or "qwen/qwen3.8-27b"
 
         # Instrução do sistema (System Prompt)
         self.instrucao_sistema = instrucao_sistema or (
@@ -201,9 +201,10 @@ class AgenteIA:
                 {"role": "system", "content": self.instrucao_sistema}
             ]
 
-    def enviar_mensagem(self, mensagem_usuario: str) -> str:
+    def enviar_mensagem_stream(self, mensagem_usuario: str):
         """
-        Recebe a mensagem do usuário, anexa ao histórico, consulta o LLM e retorna a resposta.
+        Recebe a mensagem do usuário e produz um gerador (stream) de pedaços de texto em tempo real.
+        Salva a mensagem completa no histórico ao final da transmissão.
         """
         self.historico.append({
             "role": "user",
@@ -211,27 +212,42 @@ class AgenteIA:
         })
 
         try:
+            texto_acumulado = []
             if self.provedor == "gemini":
-                resposta = self.chat_session.send_message(mensagem_usuario)
-                texto_resposta = resposta.text
+                for chunk in self.chat_session.send_message_stream(mensagem_usuario):
+                    if chunk.text:
+                        texto_acumulado.append(chunk.text)
+                        yield chunk.text
             else:
-                resposta = self.client.chat.completions.create(
+                resposta_stream = self.client.chat.completions.create(
                     model=self.modelo,
                     messages=self.historico,
                     temperature=0.7,
                     max_tokens=1024,
+                    stream=True,
                 )
-                texto_resposta = resposta.choices[0].message.content
+                for chunk in resposta_stream:
+                    if chunk.choices and chunk.choices[0].delta.content:
+                        conteudo = chunk.choices[0].delta.content
+                        texto_acumulado.append(conteudo)
+                        yield conteudo
 
+            texto_final = "".join(texto_acumulado)
             self.historico.append({
                 "role": "assistant",
-                "content": texto_resposta
+                "content": texto_final
             })
-            return texto_resposta
 
         except Exception as e:
             self.historico.pop()
             raise RuntimeError(f"Erro ao comunicar com o modelo ({self.provedor}): {str(e)}")
+
+    def enviar_mensagem(self, mensagem_usuario: str) -> str:
+        """
+        Recebe a mensagem do usuário, anexa ao histórico, consulta o LLM e retorna a resposta completa.
+        """
+        partes = list(self.enviar_mensagem_stream(mensagem_usuario))
+        return "".join(partes)
 
     def limpar_memoria(self):
         """Reinicia o histórico da conversa e a sessão."""

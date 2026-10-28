@@ -30,9 +30,9 @@ with st.sidebar:
         ]
     else:
         modelos_disponiveis = [
-            "llama-3.1-8b-instant",
-            "llama-3.3-70b-versatile",
-            "qwen/qwen3.8-27b"
+            "qwen/qwen3.8-27b",
+            "openai/gpt-oss-120b",
+            "openai/gpt-oss-20b"
         ]
 
     modelo_selecionado = st.selectbox("Modelo:", modelos_disponiveis, index=0)
@@ -46,7 +46,7 @@ st.title("🤖 Assistente de IA")
 st.caption(f"Conectado via **{provedor_selecionado}** utilizando o modelo **{modelo_selecionado}**.")
 
 # Versão do agente para garantir que a instância em memória use as ferramentas mais recentes
-VERSAO_AGENTE = "v2_websearch"
+VERSAO_AGENTE = "v3_streaming"
 
 agente_atual = st.session_state.get("agente")
 versao_atual = st.session_state.get("versao_agente")
@@ -83,15 +83,14 @@ if pergunta := st.chat_input("Digite sua mensagem..."):
     with st.chat_message("user"):
         st.write(pergunta)
 
-    # Resposta da IA
+    # Resposta da IA com Streaming em tempo real
     with st.chat_message("assistant"):
-        with st.spinner("Pensando..."):
-            try:
-                resposta = st.session_state.agente.enviar_mensagem(pergunta)
-                st.write(resposta)
-                st.session_state.mensagens.append({"role": "assistant", "content": resposta})
-            except Exception as e:
-                st.error(f"Erro ao obter resposta: {e}")
+        try:
+            fluxo = st.session_state.agente.enviar_mensagem_stream(pergunta)
+            resposta = st.write_stream(fluxo)
+            st.session_state.mensagens.append({"role": "assistant", "content": resposta})
+        except Exception as e:
+            st.error(f"Erro ao obter resposta: {e}")
 
 # Botão para limpar conversa
 if st.session_state.mensagens:
