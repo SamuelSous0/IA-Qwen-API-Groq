@@ -9,7 +9,7 @@ load_dotenv()
 
 def _data_hora_atual() -> str:
     """Retorna a data e hora atual formatada em português."""
-    agora = datetime.now()
+    agora = datetime.now().astimezone()
     dias_semana = ["Segunda-feira", "Terça-feira", "Quarta-feira",
                    "Quinta-feira", "Sexta-feira", "Sábado", "Domingo"]
     meses = ["janeiro", "fevereiro", "março", "abril", "maio", "junho",
@@ -287,28 +287,12 @@ class AgenteIA:
                         # Continua o loop para o modelo processar o resultado
                         continue
 
-                    # Resposta final: faz stream simulado para manter a interface
+                    # Resposta final: o modelo já respondeu com os resultados da busca.
+                    # Entrega o conteúdo diretamente (sem nova chamada ao LLM).
                     resposta_final = msg.content or ""
-                    resposta_stream = self.client.chat.completions.create(
-                        model=self.modelo,
-                        messages=historico_tmp + [{"role": "assistant", "content": resposta_final}],
-                        temperature=0.7,
-                        max_tokens=1,
-                        stream=False,
-                    )
-                    # Entrega o texto acumulado da resposta final em stream real
-                    stream_final = self.client.chat.completions.create(
-                        model=self.modelo,
-                        messages=historico_tmp,
-                        temperature=0.7,
-                        max_tokens=1024,
-                        stream=True,
-                    )
-                    for chunk in stream_final:
-                        if chunk.choices and chunk.choices[0].delta.content:
-                            conteudo = chunk.choices[0].delta.content
-                            texto_acumulado.append(conteudo)
-                            yield conteudo
+                    for char in resposta_final:
+                        texto_acumulado.append(char)
+                        yield char
                     break
 
             texto_final = "".join(texto_acumulado)
