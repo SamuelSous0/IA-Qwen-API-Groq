@@ -1,8 +1,5 @@
 import os
-import importlib
 import streamlit as st
-import agente as agente_module
-importlib.reload(agente_module)
 from agente import AgenteIA
 
 st.set_page_config(
@@ -65,11 +62,14 @@ if precisa_recriar:
             modelo=modelo_selecionado
         )
         st.session_state.versao_agente = VERSAO_AGENTE
-        if "mensagens" not in st.session_state:
-            st.session_state.mensagens = []
+        st.session_state.mensagens = []
     except Exception as e:
         st.error(f"Erro ao inicializar o agente: {e}")
         st.stop()
+
+# Garante que mensagens existe mesmo quando o agente não foi recriado
+if "mensagens" not in st.session_state:
+    st.session_state.mensagens = []
 
 # Exibe histórico de mensagens
 for msg in st.session_state.mensagens:
