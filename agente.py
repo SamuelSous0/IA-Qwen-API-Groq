@@ -1,8 +1,24 @@
 import os
+import json
+from datetime import datetime
 from dotenv import load_dotenv
 
 # Carrega variáveis de ambiente do arquivo .env (caso exista)
 load_dotenv()
+
+
+def _data_hora_atual() -> str:
+    """Retorna a data e hora atual formatada em português."""
+    agora = datetime.now()
+    dias_semana = ["Segunda-feira", "Terça-feira", "Quarta-feira",
+                   "Quinta-feira", "Sexta-feira", "Sábado", "Domingo"]
+    meses = ["janeiro", "fevereiro", "março", "abril", "maio", "junho",
+             "julho", "agosto", "setembro", "outubro", "novembro", "dezembro"]
+    dia_semana = dias_semana[agora.weekday()]
+    return (
+        f"{dia_semana}, {agora.day} de {meses[agora.month - 1]} de {agora.year}, "
+        f"{agora.strftime('%H:%M')}"
+    )
 
 
 def pesquisar_na_web(termo: str) -> str:
@@ -159,13 +175,17 @@ class AgenteIA:
                 raise ValueError("Chave da Groq não encontrada! Defina GROQ_API_KEY no arquivo .env.")
             self.modelo = modelo or "qwen/qwen3.8-27b"
 
-        # Instrução do sistema (System Prompt)
-        self.instrucao_sistema = instrucao_sistema or (
+        # Instrução do sistema (System Prompt) — inclui data/hora atual
+        data_hora = _data_hora_atual()
+        base_instrucao = instrucao_sistema or (
             "Você é um assistente virtual inteligente, amigável e prestativo com acesso à internet em tempo real. "
             "Responda sempre com clareza em português, com boa formatação e seja educado. "
             "Sempre que a pergunta do usuário requerer ou se beneficiar de dados em tempo real, eventos recentes, "
             "fatos atualizados ou confirmação na internet sobre qualquer assunto, utilize a ferramenta "
             "'pesquisar_na_web' para obter as informações mais recentes antes de responder."
+        )
+        self.instrucao_sistema = (
+            f"[Data e hora atual: {data_hora}]\n\n" + base_instrucao
         )
 
         # Histórico da conversa visível
@@ -219,18 +239,77 @@ class AgenteIA:
                         texto_acumulado.append(chunk.text)
                         yield chunk.text
             else:
-                resposta_stream = self.client.chat.completions.create(
-                    model=self.modelo,
-                    messages=self.historico,
-                    temperature=0.7,
-                    max_tokens=1024,
-                    stream=True,
-                )
-                for chunk in resposta_stream:
-                    if chunk.choices and chunk.choices[0].delta.content:
-                        conteudo = chunk.choices[0].delta.content
-                        texto_acumulado.append(conteudo)
-                        yield conteudo
+                # Groq: tool calling loop (sem stream durante chamadas de ferramenta)
+                ferramentas_groq = [
+                    {
+                        "type": "function",
+                        "function": {
+                            "name": "pesquisar_na_web",
+                            "description": pesquisar_na_web.__doc__,
+                            "parameters": {
+                                "type": "object",
+                                "properties": {
+                                    "termo": {
+                                        "type": "string",
+                                        "description": "O termo ou pergunta para pesquisar na web."
+                                    }
+                                },
+                                "required": ["termo"]
+                            }
+                        }
+                    }
+                ]
+
+                historico_tmp = list(self.historico)
+                while True:
+                    resposta = self.client.chat.completions.create(
+                        model=self.modelo,
+                        messages=historico_tmp,
+                        temperature=0.7,
+                        max_tokens=1024,
+                        tools=ferramentas_groq,
+                        tool_choice="auto",
+                        stream=False,
+                    )
+                    msg = resposta.choices[0].message
+
+                    # Se o modelo quer chamar uma ferramenta
+                    if msg.tool_calls:
+                        historico_tmp.append(msg)
+                        for tc in msg.tool_calls:
+                            args = json.loads(tc.function.arguments)
+                            resultado = pesquisar_na_web(args.get("termo", ""))
+                            historico_tmp.append({
+                                "role": "tool",
+                                "tool_call_id": tc.id,
+                                "content": resultado,
+                            })
+                        # Continua o loop para o modelo processar o resultado
+                        continue
+
+                    # Resposta final: faz stream simulado para manter a interface
+                    resposta_final = msg.content or ""
+                    resposta_stream = self.client.chat.completions.create(
+                        model=self.modelo,
+                        messages=historico_tmp + [{"role": "assistant", "content": resposta_final}],
+                        temperature=0.7,
+                        max_tokens=1,
+                        stream=False,
+                    )
+                    # Entrega o texto acumulado da resposta final em stream real
+                    stream_final = self.client.chat.completions.create(
+                        model=self.modelo,
+                        messages=historico_tmp,
+                        temperature=0.7,
+                        max_tokens=1024,
+                        stream=True,
+                    )
+                    for chunk in stream_final:
+                        if chunk.choices and chunk.choices[0].delta.content:
+                            conteudo = chunk.choices[0].delta.content
+                            texto_acumulado.append(conteudo)
+                            yield conteudo
+                    break
 
             texto_final = "".join(texto_acumulado)
             self.historico.append({
